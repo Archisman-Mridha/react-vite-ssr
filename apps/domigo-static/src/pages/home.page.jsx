@@ -1,10 +1,7 @@
-import ProfileImagePath from "../assets/moeen.jpg"
+import { HomeComponent } from "components/home/home.component"
 
 export function Home( ) {
     return (
-        <div>
-            <p>Welcome to Moeen's Home</p>
-            <img src={ProfileImagePath} />
-        </div>
+        <HomeComponent />
     )
 }
