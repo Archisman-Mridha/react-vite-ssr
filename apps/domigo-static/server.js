@@ -1,50 +1,90 @@
-import express from "express"
-import { createServer as createViteServer } from "vite"
 import fs from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
+import express from "express"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-async function createSrever( ) {
+export async function createServer(root = process.cwd( ), isProd = process.env.NODE_ENV === "production", hmrPort) {
+    const resolve = (p) => path.resolve(__dirname, p)
+
+    const indexProd = isProd ? fs.readFileSync(resolve("dist/client/index.html"), "utf-8") : ""
+
     const app = express( )
 
-    //* Create Vite server in middleware mode and configure the app type as
-    //* 'custom', disabling Vite's own HTML serving logic so parent server
-    //* can take control
-    const viteServer = await createViteServer({
-        server: { middlewareMode: true },
-        appType: "custom"
-    })
+    /**
+     * @type {import('vite').ViteDevServer}
+     */
+    let vite
+    if (!isProd) {
+        vite = await (
+            await import("vite")
+        ).createServer({
+            root,
+            server: {
+                middlewareMode: true,
+                watch: {
+                    // During tests we edit the files too fast and sometimes chokidar
+                    // misses change events, so enforce polling for consistency
+                    usePolling: true,
+                    interval: 100
+                },
+                hmr: {
+                    port: hmrPort
+                }
+            },
+            appType: "custom"
+        })
+        // use vite's connect instance as middleware
+        app.use(vite.middlewares)
+    } else {
+        app.use((await import("compression")).default( ))
+        app.use(
+            (await import("serve-static")).default(resolve("dist/client"), {
+                index: false
+            })
+        )
+    }
 
-    //* use vite's connect instance as middleware
-    app.use(viteServer.middlewares)
-
-    app.use("*", async (req, res, next) => {
-        const url = req.originalUrl
-
+    app.use("*", async (req, res) => {
         try {
-            //* read the index.html file
-            let template = fs.readFileSync(path.resolve(__dirname, "index.html"), "utf-8")
+            const url = req.originalUrl
 
-            //* injects the Vite HMR client, and also applies HTML transforms from Vite plugins
-            template = await viteServer.transformIndexHtml(url, template)
+            let template, render
+            if (!isProd) {
+                // always read fresh template in dev
+                template = fs.readFileSync(resolve("index.html"), "utf-8")
+                template = await vite.transformIndexHtml(url, template)
+                render = (await vite.ssrLoadModule("/src/entry-server.jsx")).render
+            } else {
+                template = indexProd
+                // @ts-ignore
+                render = (await import("./dist/server/entry-server.js")).render
+            }
 
-            //* entry-server.js converts the ES6 syntax to ESM syntax which is recognized by NodeJS and prepares the HTML which will
-            // renderred in the client side
-            const { render } = await viteServer.ssrLoadModule("/src/entry-server.jsx")
-            const appHtml = await render(url)
+            const context = {}
+            const appHtml = render(url, context)
+
+            if (context.url) {
+                // Somewhere a `<Redirect>` was rendered
+                return res.redirect(301, context.url)
+            }
+
             const html = template.replace(`<!--ssr-outlet-->`, appHtml)
 
             res.status(200).set({ "Content-Type": "text/html" }).end(html)
-        } catch (error) {
-            viteServer.ssrFixStacktrace(error)
-
-            next(error)
+        } catch (e) {
+            !isProd && vite.ssrFixStacktrace(e)
+            console.log(e.stack)
+            res.status(500).end(e.stack)
         }
     })
 
-    app.listen(5173, ( ) => console.log("starting nodeJS express server"))
+    return { app, vite }
 }
 
-createSrever( )
+createServer( ).then(({ app }) =>
+    app.listen(5173, ( ) => {
+        console.log("http://localhost:5173")
+    })
+)
