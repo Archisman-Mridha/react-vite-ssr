@@ -1,7 +1,10 @@
+import ProfileImagePath from "../assets/moeen.jpg"
+
 export function Home( ) {
     return (
         <div>
-            Welcome to Moeen's Home
+            <p>Welcome to Moeen's Home</p>
+            <img src={ProfileImagePath} />
         </div>
     )
 }
